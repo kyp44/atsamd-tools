@@ -11,9 +11,11 @@ from colorama import init, Fore, Style
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(
-    description="Compiles all Tier BSP examples one at a time and stops if one fails. Should be run from `atsamd/boards/`.")
+    description="Compiles all Tier BSP examples one at a time and summarizes the results. Should be run from `atsamd/boards/`.")
 parser.add_argument("--warnings", "-w", action="store_true",
                     help="treat warnings as errors")
+parser.add_argument("--clippy", "-c", action="store_true",
+                    help="run clippy instead of building, treating warnings as errors")
 args = parser.parse_args()
 
 
@@ -21,6 +23,8 @@ args = parser.parse_args()
 class Bsp:
     name: str
     special_examples: List[Example] = field(default_factory=lambda: [])
+    features: Optional[List[str]] = None
+    flags: Optional[str] = None
 
     def example_from_filename(self, filename: str) -> Example:
         (name, _) = os.path.splitext(os.path.basename(filename))
@@ -39,19 +43,24 @@ class Example:
     def slug(self, bsp: Bsp) -> str:
         return os.path.join(bsp.name, self.name)
 
-    def clippy(self, bsp: Bsp) -> bool:
-        wae = "RUSTFLAGS=\"-D warnings\"" if args.warnings else ""
+    def run(self, bsp: Bsp) -> bool:
+        wae = "RUSTFLAGS=\"-D warnings\"" if args.warnings or args.clippy else ""
+        cmd = "clippy" if args.clippy else "build"
+        flags = "" if bsp.flags is None else bsp.flags
+
         os.chdir(bsp.name)
         res = os.system(
-            f"{wae} cargo clippy {self.features_flag()} --example {self.name}")
+            f"{wae} cargo {cmd} {self.features_flag(bsp)} {flags} --example {self.name}")
         os.chdir("..")
         return res == 0
 
-    def features_flag(self) -> str:
-        if self.features is None:
-            return "--all-features"
-        else:
+    def features_flag(self, bsp) -> str:
+        if bsp.features is not None:
+            return f"--features \"{" ".join(bsp.features)}\""
+        elif self.features is not None:
             return f"--features \"{" ".join(self.features)}\""
+
+        return "--all-features"
 
 
 @dataclass
@@ -63,8 +72,15 @@ class Result:
 
 bsps = [
     Bsp("atsame54_xpro"),
-    Bsp("samd11_bare"),
-    Bsp("feather_m0", [Example("adalogger", ["adalogger", "usb", "sdmmc"])]),
+    Bsp("samd11_bare", flags="--release"),
+    Bsp("feather_m0", [
+        Example("adalogger", ["adalogger", "usb", "sdmmc"]),
+        Example("async_dmac", ["dma", "async"]),
+        Example("async_eic", ["async"]),
+        Example("async_i2c", ["dma", "async"]),
+        Example("async_spi", ["dma", "async"]),
+        Example("async_uart", ["dma", "async"]),
+    ]),
     Bsp("feather_m4"),
     Bsp("metro_m0"),
     Bsp("metro_m4"),
@@ -76,7 +92,7 @@ results = []
 for bsp in bsps:
     for example in bsp.examples():
         print(f"Compiling {example.slug(bsp)}...")
-        results.append(Result(bsp, example, example.clippy(bsp)))
+        results.append(Result(bsp, example, example.run(bsp)))
 
 # Summary
 for res in results:
